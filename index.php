@@ -352,7 +352,7 @@ include 'header.php';
 <div class="card bg-white shadow-sm border-0 mb-5 overflow-hidden rounded-4">
     <div class="card-header bg-primary text-white p-3 fw-bold">📥 Сколько я должен (<?php echo count($received_invoices); ?>)</div>
     <div class="table-responsive"><table class="table table-hover align-middle mb-0">
-        <thead class="table-light small"><tr><th>№</th><th>ИСПОЛНИТЕЛЬ</th><th>СОДЕРЖАНИЕ</th><th>ИСХОДНАЯ</th><th>СКИДКА / БОНУСЫ</th><th>К ОПЛАТЕ</th><th>СРОК</th><th>ДЕЙСТВИЕ</th><th>ПЕЧАТЬ</th></tr></thead>
+        <thead class="table-light small"><tr><th>№</th><th>ИСПОЛНИТЕЛЬ</th><th>СОДЕРЖАНИЕ</th><th>ИСХОДНАЯ</th><th>СКИДКА / БОНУСЫ</th><th>К ОПЛАТЕ</th><th>СРОК</th><th>🎁 БОНУСЫ</th><th>СТАТУС</th><th>ПЕЧАТЬ</th></tr></thead>
         <tbody id="received-invoices-tbody">
             <?php 
             foreach($received_invoices as $i):
@@ -391,22 +391,25 @@ include 'header.php';
                     <?php else: ?><span class="text-muted">—</span><?php endif; ?>
                 </td>
                 <td>
-                    <div class="mb-2">
-                        <div class="status-container">
-                            <?php if($i['status'] != 'Оплачен' && empty($i['pending_status'])): ?>
-                            <?php else: ?>
-                                <span class="badge bg-light text-dark border w-100 p-2 mb-2 pending-status-badge"><?php echo safeGet($i, 'pending_status') ?: safeGet($i, 'status'); ?></span>
-                            <?php endif; ?>
-                        </div>
-                        <?php if($i['status'] != 'Оплачен' && $final > 0): ?>
-                            <form method="POST" class="d-flex flex-column gap-2 ajax-use-bonuses">
-                                <div class="input-group input-group-sm">
-                                    <input type="hidden" name="inv_id" value="<?php echo intval($i['id']); ?>">
-                                    <input type="number" name="bonuses_byn" step="0.01" min="0.01" max="<?php echo number_format($final, 2); ?>" class="form-control bonus-input" placeholder="Списать (BYN)" title="Введите сумму бонусов для списания">
-                                    <button type="submit" name="use_bonuses" class="btn btn-warning fw-bold">🎁 Списать</button>
-                                </div>
-                                <small class="text-muted">Доступно: <span class="bonus-available-display"><?php echo number_format((floatval($curr_user['bonus_balance'] ?? 0) / 100), 2); ?></span> BYN</small>
-                            </form>
+                    <?php if($i['status'] != 'Оплачен' && $final > 0): ?>
+                        <form method="POST" class="ajax-use-bonuses">
+                            <div class="input-group input-group-sm">
+                                <input type="hidden" name="inv_id" value="<?php echo intval($i['id']); ?>">
+                                <input type="number" name="bonuses_byn" step="0.01" min="0.01" max="<?php echo number_format($final, 2); ?>" class="form-control bonus-input" placeholder="Сумма" title="Введите сумму бонусов для списания">
+                                <button type="submit" name="use_bonuses" class="btn btn-warning btn-sm fw-bold">Списать</button>
+                            </div>
+                            <small class="text-muted d-block mt-1">Доступно: <span class="bonus-available-display"><?php echo number_format((floatval($curr_user['bonus_balance'] ?? 0) / 100), 2); ?></span> BYN</small>
+                        </form>
+                    <?php else: ?>
+                        <span class="text-muted small">—</span>
+                    <?php endif; ?>
+                </td>
+                <td>
+                    <div class="status-container mb-2">
+                        <?php if(!empty($i['pending_status'])): ?>
+                            <span class="badge bg-light text-dark border w-100 p-2 pending-status-badge"><?php echo safeGet($i, 'pending_status'); ?></span>
+                        <?php else: ?>
+                            <span class="badge bg-light text-dark border w-100 p-2"><?php echo safeGet($i, 'status'); ?></span>
                         <?php endif; ?>
                     </div>
                     <form action="update_status.php" method="POST" class="d-inline w-100">
@@ -519,6 +522,10 @@ include 'header.php';
 .modal-close-btn:hover {
     color: #000;
 }
+
+.ajax-use-bonuses {
+    min-width: 200px;
+}
 </style>
 
 <div id="items-modal" class="items-modal-overlay">
@@ -539,7 +546,7 @@ function showItemsModal(itemsJson) {
         if (Array.isArray(items) && items.length > 0) {
             items.forEach(item => {
                 const li = document.createElement('li');
-                li.innerHTML = `<strong>${item.description}</strong> ��� ${parseFloat(item.original_amount).toFixed(2)} ${item.currency}`;
+                li.innerHTML = `<strong>${item.description}</strong> — ${parseFloat(item.original_amount).toFixed(2)} ${item.currency}`;
                 listContainer.appendChild(li);
             });
         } else {
@@ -613,7 +620,6 @@ document.addEventListener('DOMContentLoaded', function() {
             e.preventDefault();
             const formData = new FormData(this);
             formData.append('use_bonuses_ajax', '1');
-            formData.append('use_bonuses', '1');
             
             const btn = this.querySelector('button');
             const originalBtnText = btn.innerHTML;
@@ -656,19 +662,24 @@ document.addEventListener('DOMContentLoaded', function() {
                     statTotalRecv.innerText = newTotalRecv.toFixed(2) + ' BYN';
 
                     const badgeContainer = row.querySelector('.bonus-spent-badge');
-                    badgeContainer.innerHTML = `<span class="badge bg-warning">Бонусы: -${bonusesByn.toFixed(2)}</span>`;
+                    const existingBadge = badgeContainer.querySelector('.badge');
+                    if (existingBadge) {
+                        const existingAmount = parseFloat(existingBadge.innerText.replace(/[^\d.]/g, ''));
+                        const totalBonus = existingAmount + bonusesByn;
+                        badgeContainer.innerHTML = `<span class="badge bg-warning">Бонусы: -${totalBonus.toFixed(2)}</span>`;
+                    } else {
+                        badgeContainer.innerHTML = `<span class="badge bg-warning">Бонусы: -${bonusesByn.toFixed(2)}</span>`;
+                    }
                     
                     const noDiscounts = row.querySelector('.no-discounts');
                     if (noDiscounts) noDiscounts.remove();
 
-                    const statusContainer = row.querySelector('.status-container');
-                    statusContainer.innerHTML = `<span class="badge bg-light text-dark border w-100 p-2 mb-2 pending-status-badge">Бонусы списаны</span>`;
-
                     if (newFinal <= 0) {
-                        form.closest('.mb-2').remove();
+                        form.innerHTML = '<span class="text-muted small">—</span>';
                     } else {
                         const input = form.querySelector('.bonus-input');
                         input.value = '';
+                        input.max = newFinal.toFixed(2);
                         input.focus();
                     }
                 } else {
