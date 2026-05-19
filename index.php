@@ -156,12 +156,8 @@ $curr_user = $u_stmt->fetch(PDO::FETCH_ASSOC);
 
 // --- счета ---
 $sql_base = "SELECT i.*, u.username as contact_name,
-            (SELECT GROUP_CONCAT(CONCAT(description, ' (', (original_amount + 0), ' ', currency, ')') SEPARATOR '\n')
-            FROM invoice_items WHERE invoice_id = i.id) as items_summary,
-            (SELECT GROUP_CONCAT(CONCAT((original_amount + 0), ' ', currency) SEPARATOR ', ')
-            FROM invoice_items WHERE invoice_id = i.id) as orig_cur,
-            (SELECT GROUP_CONCAT(CONCAT(description, ' — ', (original_amount + 0), ' ', currency) SEPARATOR ' | ')
-            FROM invoice_items WHERE invoice_id = i.id) as full_items_list
+            (SELECT GROUP_CONCAT(CONCAT(description, ' (', ROUND(original_amount, 2), ' ', currency, ')') SEPARATOR '\n')
+            FROM invoice_items WHERE invoice_id = i.id) as items_summary
             FROM invoices i JOIN users1 u ON ";
 
 $sent_stmt = $pdo->prepare($sql_base . "i.receiver_id1 = u.id WHERE i.sender_id1 = ? ORDER BY i.created_at DESC");
@@ -171,6 +167,15 @@ $sent_invoices = $sent_stmt->fetchAll(PDO::FETCH_ASSOC);
 $recv_stmt = $pdo->prepare($sql_base . "i.sender_id1 = u.id WHERE i.receiver_id1 = ? ORDER BY i.created_at DESC");
 $recv_stmt->execute([$u_id]);
 $received_invoices = $recv_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Загружаем полные детали позиций для модала
+$items_data = [];
+foreach (array_merge($sent_invoices, $received_invoices) as $inv) {
+    $itemsStmt = $pdo->prepare("SELECT description, original_amount, currency FROM invoice_items WHERE invoice_id = ? ORDER BY id");
+    $itemsStmt->execute([$inv['id']]);
+    $items = $itemsStmt->fetchAll(PDO::FETCH_ASSOC);
+    $items_data[$inv['id']] = json_encode($items);
+}
 
 // --- ИСТОРИЯ ЧЕКОВ ---
 $receipts_stmt = $pdo->prepare("
@@ -303,10 +308,12 @@ include 'header.php';
                 <td><b><?php echo safeGet($i, 'contact_name'); ?></b></td>
                 <td style="max-width:300px;">
                     <div class="invoice-items-preview">
-                        <small class="text-dark d-block mb-1"><?php echo nl2br(htmlspecialchars($i['items_summary'] ?? '')); ?></small>
-                        <button type="button" class="btn btn-sm btn-link p-0 toggle-items-details" data-items='<?php echo htmlspecialchars(json_encode($i['full_items_list'] ?? '')); ?>'>
+                        <small class="text-dark d-block mb-1"><?php echo nl2br(htmlspecialchars($i['items_summary'] ?? 'Нет позиций')); ?></small>
+                        <?php if(!empty($items_data[$i['id']])): ?>
+                        <button type="button" class="btn btn-sm btn-link p-0 toggle-items-details" data-items='<?php echo htmlspecialchars($items_data[$i['id']]); ?>'>
                             📋 Показать полностью
                         </button>
+                        <?php endif; ?>
                     </div>
                 </td>
                 <td><span class="text-muted"><?php echo number_format($original, 2); ?> BYN</span></td>
@@ -359,10 +366,12 @@ include 'header.php';
                 <td><b><?php echo safeGet($i, 'contact_name'); ?></b></td>
                 <td style="max-width:300px;">
                     <div class="invoice-items-preview">
-                        <small class="text-dark d-block mb-1"><?php echo nl2br(htmlspecialchars($i['items_summary'] ?? '')); ?></small>
-                        <button type="button" class="btn btn-sm btn-link p-0 toggle-items-details" data-items='<?php echo htmlspecialchars(json_encode($i['full_items_list'] ?? '')); ?>'>
+                        <small class="text-dark d-block mb-1"><?php echo nl2br(htmlspecialchars($i['items_summary'] ?? 'Нет позиций')); ?></small>
+                        <?php if(!empty($items_data[$i['id']])): ?>
+                        <button type="button" class="btn btn-sm btn-link p-0 toggle-items-details" data-items='<?php echo htmlspecialchars($items_data[$i['id']]); ?>'>
                             📋 Показать полностью
                         </button>
+                        <?php endif; ?>
                     </div>
                 </td>
                 <td><span class="text-muted"><?php echo number_format($original, 2); ?> BYN</span></td>
@@ -393,7 +402,7 @@ include 'header.php';
                             <form method="POST" class="d-flex flex-column gap-2 ajax-use-bonuses">
                                 <div class="input-group input-group-sm">
                                     <input type="hidden" name="inv_id" value="<?php echo intval($i['id']); ?>">
-                                    <input type="number" name="bonuses_byn" step="0.01" min="0.01" class="form-control bonus-input" placeholder="Списать (BYN)" title="Введите сумму бонусов для списания">
+                                    <input type="number" name="bonuses_byn" step="0.01" min="0.01" max="<?php echo number_format($final, 2); ?>" class="form-control bonus-input" placeholder="Списать (BYN)" title="Введите сумму бонусов для списания">
                                     <button type="submit" name="use_bonuses" class="btn btn-warning fw-bold">🎁 Списать</button>
                                 </div>
                                 <small class="text-muted">Доступно: <span class="bonus-available-display"><?php echo number_format((floatval($curr_user['bonus_balance'] ?? 0) / 100), 2); ?></span> BYN</small>
@@ -423,6 +432,7 @@ include 'header.php';
     color: #0d6efd;
     text-decoration: none;
     font-size: 0.85rem;
+    cursor: pointer;
 }
 
 .toggle-items-details:hover {
@@ -456,6 +466,18 @@ include 'header.php';
     overflow-y: auto;
     box-shadow: 0 4px 20px rgba(0,0,0,0.3);
     position: relative;
+    animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .items-modal-content h5 {
@@ -471,11 +493,15 @@ include 'header.php';
 }
 
 .items-list-full li {
-    padding: 10px;
+    padding: 12px;
     border-left: 3px solid #0d6efd;
     margin-bottom: 8px;
     background: #f8f9fa;
     border-radius: 4px;
+}
+
+.items-list-full li strong {
+    color: #0d6efd;
 }
 
 .modal-close-btn {
@@ -487,6 +513,7 @@ include 'header.php';
     font-size: 24px;
     cursor: pointer;
     color: #666;
+    padding: 0;
 }
 
 .modal-close-btn:hover {
@@ -496,7 +523,7 @@ include 'header.php';
 
 <div id="items-modal" class="items-modal-overlay">
     <div class="items-modal-content">
-        <button class="modal-close-btn" onclick="closeItemsModal()">✕</button>
+        <button type="button" class="modal-close-btn" onclick="closeItemsModal()">✕</button>
         <h5>📋 Полный список позиций счета</h5>
         <ul class="items-list-full" id="items-list-content"></ul>
     </div>
@@ -504,18 +531,26 @@ include 'header.php';
 
 <script>
 function showItemsModal(itemsJson) {
-    const items = JSON.parse(itemsJson);
-    const itemsList = items.split(' | ');
-    const listContainer = document.getElementById('items-list-content');
-    listContainer.innerHTML = '';
-    
-    itemsList.forEach(item => {
-        const li = document.createElement('li');
-        li.textContent = item.trim();
-        listContainer.appendChild(li);
-    });
-    
-    document.getElementById('items-modal').classList.add('active');
+    try {
+        const items = JSON.parse(itemsJson);
+        const listContainer = document.getElementById('items-list-content');
+        listContainer.innerHTML = '';
+        
+        if (Array.isArray(items) && items.length > 0) {
+            items.forEach(item => {
+                const li = document.createElement('li');
+                li.innerHTML = `<strong>${item.description}</strong> ��� ${parseFloat(item.original_amount).toFixed(2)} ${item.currency}`;
+                listContainer.appendChild(li);
+            });
+        } else {
+            listContainer.innerHTML = '<li>Нет данных о позициях</li>';
+        }
+        
+        document.getElementById('items-modal').classList.add('active');
+    } catch (e) {
+        console.error('Ошибка парсинга данных:', e);
+        alert('Ошибка при загрузке деталей счета');
+    }
 }
 
 function closeItemsModal() {
@@ -573,8 +608,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }, 3000);
 
     // 2. Обработка списания бонусов через AJAX
-    const bonusForms = document.querySelectorAll('.ajax-use-bonuses');
-    bonusForms.forEach(form => {
+    function attachBonusFormHandler(form) {
         form.addEventListener('submit', function(e) {
             e.preventDefault();
             const formData = new FormData(this);
@@ -584,7 +618,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const btn = this.querySelector('button');
             const originalBtnText = btn.innerHTML;
             btn.disabled = true;
-            btn.innerHTML = '...';
+            btn.innerHTML = '⏳...';
 
             fetch('index.php', {
                 method: 'POST',
@@ -602,12 +636,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                     
                     const alerts = document.getElementById('ajax-alerts');
-                    alerts.innerHTML = `<div class="alert alert-success alert-dismissible fade show">
-                        ${data.msg}
+                    alerts.innerHTML = `<div class="alert alert-success alert-dismissible fade show" role="alert">
+                        ✅ ${data.msg}
                         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                     </div>`;
 
-                    // Обновляем элементы строки вручную
+                    // Обновляем элементы строки
                     const row = form.closest('tr');
                     const bonusesByn = parseFloat(formData.get('bonuses_byn'));
                     
@@ -631,23 +665,27 @@ document.addEventListener('DOMContentLoaded', function() {
                     statusContainer.innerHTML = `<span class="badge bg-light text-dark border w-100 p-2 mb-2 pending-status-badge">Бонусы списаны</span>`;
 
                     if (newFinal <= 0) {
-                        form.remove();
+                        form.closest('.mb-2').remove();
                     } else {
                         const input = form.querySelector('.bonus-input');
                         input.value = '';
+                        input.focus();
                     }
                 } else {
-                    alert(data.error || 'Ошибка при списании');
+                    alert('❌ ' + (data.error || 'Ошибка при списании'));
                 }
             })
             .catch(error => {
                 btn.disabled = false;
                 btn.innerHTML = originalBtnText;
                 console.error('Error:', error);
+                alert('❌ Ошибка соединения');
             });
         });
-    });
+    }
 
+    // Привязываем обработчики к существующим формам
+    document.querySelectorAll('.ajax-use-bonuses').forEach(attachBonusFormHandler);
 });
 </script>
 
